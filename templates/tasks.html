@@ -24,8 +24,14 @@
     </table>
 </div>
 
-<div class="text-muted small text-end">
-    <span id="poll-status">自动刷新中...</span>
+<!-- 分页导航 -->
+<nav id="pagination-nav" class="d-none">
+    <ul class="pagination justify-content-center mb-0" id="pagination-list"></ul>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="task-count"></small>
+    <span id="poll-status" class="text-muted small">自动刷新中...</span>
 </div>
 
 {% endblock %}
@@ -38,6 +44,9 @@ const TYPE_MAP = {
     merge: '合并 PDF',
     batch_ocr: '批量 OCR',
 };
+
+let currentPage = 1;
+const perPage = 10;
 
 function statusBadge(status) {
     if (status === 'processing') return '<span class="badge bg-warning text-dark">处理中</span>';
@@ -53,7 +62,10 @@ function actionButtons(t) {
         html += `<a href="/download/${t.id}" class="btn btn-sm btn-success me-1">下载</a>`;
     }
     if (t.status === 'failed' || t.status === 'interrupted') {
-        html += `<button class="btn btn-sm btn-outline-primary retry-btn" data-task-id="${t.id}">重试</button>`;
+        html += `<button class="btn btn-sm btn-outline-primary retry-btn me-1" data-task-id="${t.id}">重试</button>`;
+    }
+    if (t.status !== 'processing') {
+        html += `<button class="btn btn-sm btn-outline-danger delete-btn" data-task-id="${t.id}" data-filename="${escapeHtml(t.original_filename)}">删除</button>`;
     }
     return html;
 }
@@ -71,7 +83,6 @@ async function retryTask(taskId, btn) {
         } else {
             btn.textContent = '已提交';
             btn.classList.replace('btn-outline-primary', 'btn-outline-success');
-            // 立即刷新列表
             pollTasks();
         }
     } catch (err) {
@@ -81,46 +92,117 @@ async function retryTask(taskId, btn) {
     }
 }
 
+async function deleteTask(taskId, filename) {
+    if (!confirm(`确定要删除任务「${filename}」吗？\n\n删除后任务记录和关联文件将永久移除。`)) {
+        return;
+    }
+    try {
+        const resp = await fetch(`/api/task/${taskId}`, { method: 'DELETE' });
+        const result = await resp.json();
+        if (result.error) {
+            alert('删除失败: ' + result.error);
+        } else {
+            pollTasks();
+        }
+    } catch (err) {
+        alert('删除请求失败: ' + err.message);
+    }
+}
+
+function renderPagination(totalPages) {
+    const nav = document.getElementById('pagination-nav');
+    const list = document.getElementById('pagination-list');
+
+    if (totalPages <= 1) {
+        nav.classList.add('d-none');
+        return;
+    }
+    nav.classList.remove('d-none');
+
+    let html = '';
+    // 上一页
+    html += `<li class="page-item ${currentPage <= 1 ? 'disabled' : ''}">
+        <a class="page-link" href="#" data-page="${currentPage - 1}">&laquo;</a></li>`;
+
+    // 页码
+    for (let p = 1; p <= totalPages; p++) {
+        if (p === currentPage) {
+            html += `<li class="page-item active"><span class="page-link">${p}</span></li>`;
+        } else if (Math.abs(p - currentPage) <= 2 || p === 1 || p === totalPages) {
+            html += `<li class="page-item"><a class="page-link" href="#" data-page="${p}">${p}</a></li>`;
+        } else if (p === 2 && currentPage > 4) {
+            html += '<li class="page-item disabled"><span class="page-link">...</span></li>';
+        } else if (p === totalPages - 1 && currentPage < totalPages - 3) {
+            html += '<li class="page-item disabled"><span class="page-link">...</span></li>';
+        }
+    }
+
+    // 下一页
+    html += `<li class="page-item ${currentPage >= totalPages ? 'disabled' : ''}">
+        <a class="page-link" href="#" data-page="${currentPage + 1}">&raquo;</a></li>`;
+
+    list.innerHTML = html;
+
+    // 绑定分页点击
+    list.querySelectorAll('a.page-link[data-page]').forEach(a => {
+        a.addEventListener('click', function(e) {
+            e.preventDefault();
+            const p = parseInt(this.dataset.page);
+            if (p >= 1 && p <= totalPages) {
+                currentPage = p;
+                pollTasks();
+            }
+        });
+    });
+}
+
 async function pollTasks() {
     try {
-        const resp = await fetch('/api/tasks');
-        const tasks = await resp.json();
+        const resp = await fetch(`/api/tasks?page=${currentPage}&per_page=${perPage}`);
+        const data = await resp.json();
+        const tasks = data.tasks;
+        const total = data.total;
+        const totalPages = data.total_pages;
         const tbody = document.querySelector('#tasks-table tbody');
         const emptyRow = document.getElementById('tasks-empty');
 
         if (tasks.length === 0) {
             tbody.innerHTML = '';
-            tbody.appendChild(emptyRow);
-            return;
+            if (emptyRow) tbody.appendChild(emptyRow);
+            document.getElementById('task-count').textContent = '';
+        } else {
+            if (emptyRow) emptyRow.remove();
+            tbody.innerHTML = tasks.map(t => `
+                <tr>
+                    <td title="${escapeHtml(t.id)}">${escapeHtml(t.original_filename)}</td>
+                    <td>${TYPE_MAP[t.task_type] || t.task_type}</td>
+                    <td>
+                        <div class="progress" style="height: 16px;">
+                            <div class="progress-bar${t.status === 'interrupted' ? ' bg-secondary' : ''}"
+                                 style="width: ${t.progress}%">${t.progress}%</div>
+                        </div>
+                    </td>
+                    <td>${statusBadge(t.status)}${t.error_message ? '<br><small class="' +
+                        (t.status === 'failed' || t.status === 'interrupted' ? 'text-danger' : 'text-muted')
+                        + '">' + escapeHtml(t.error_message) + '</small>' : ''}</td>
+                    <td>${t.created_at || '-'}</td>
+                    <td>${actionButtons(t)}</td>
+                </tr>
+            `).join('');
+
+            // 绑定按钮事件
+            tbody.querySelectorAll('.retry-btn').forEach(btn => {
+                btn.addEventListener('click', function() { retryTask(this.dataset.taskId, this); });
+            });
+            tbody.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', function() { deleteTask(this.dataset.taskId, this.dataset.filename); });
+            });
+
+            document.getElementById('task-count').textContent =
+                `共 ${total} 个任务，第 ${data.page}/${totalPages} 页`;
         }
 
-        if (emptyRow) emptyRow.remove();
-
-        tbody.innerHTML = tasks.map(t => `
-            <tr>
-                <td title="${escapeHtml(t.id)}">${escapeHtml(t.original_filename)}</td>
-                <td>${TYPE_MAP[t.task_type] || t.task_type}</td>
-                <td>
-                    <div class="progress" style="height: 16px;">
-                        <div class="progress-bar${t.status === 'interrupted' ? ' bg-secondary' : ''}"
-                             style="width: ${t.progress}%">${t.progress}%</div>
-                    </div>
-                </td>
-                <td>${statusBadge(t.status)}${t.error_message ? '<br><small class="' +
-                    (t.status === 'failed' || t.status === 'interrupted' ? 'text-danger' : 'text-muted')
-                    + '">' + escapeHtml(t.error_message) + '</small>' : ''}</td>
-                <td>${t.created_at || '-'}</td>
-                <td>${actionButtons(t)}</td>
-            </tr>
-        `).join('');
-
-        // 绑定重试按钮事件
-        tbody.querySelectorAll('.retry-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                retryTask(this.dataset.taskId, this);
-            });
-        });
-
+        renderPagination(totalPages);
         document.getElementById('poll-status').textContent =
             '上次刷新: ' + new Date().toLocaleTimeString();
     } catch (err) {
@@ -135,8 +217,8 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// 立即加载 + 每2秒轮询
+// 立即加载 + 每3秒轮询
 pollTasks();
-setInterval(pollTasks, 2000);
+setInterval(pollTasks, 3000);
 </script>
 {% endblock %}

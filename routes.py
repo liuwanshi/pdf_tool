@@ -1,6 +1,7 @@
 """Flask 路由注册"""
 
 import json
+import logging
 import os
 import uuid
 
@@ -9,9 +10,11 @@ from flask import (
 )
 
 from config import UPLOAD_FOLDER, RESULT_FOLDER
-from models import create_task, get_task, get_all_tasks, update_task
+from models import create_task, get_task, get_tasks_paginated, delete_task as db_delete_task, count_tasks_by_input_path
 from tasks import run_task, run_ocr_task, run_batch_ocr_task, is_worker_alive, compress_task, split_task, merge_task
 from utils.file_utils import validate_file, validate_batch_files, save_upload
+
+logger = logging.getLogger(__name__)
 
 
 def register_routes(app: Flask) -> None:
@@ -85,8 +88,10 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/tasks")
     def api_get_tasks():
-        tasks = get_all_tasks()
-        return jsonify(tasks)
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 10, type=int)
+        result = get_tasks_paginated(page=page, per_page=per_page)
+        return jsonify(result)
 
     @app.route("/api/task/<task_id>/retry", methods=["POST"])
     def api_retry_task(task_id):
@@ -139,6 +144,56 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
             return jsonify({"error": f"重试失败: {e}"}), 500
+
+    @app.route("/api/task/<task_id>", methods=["DELETE"])
+    def api_delete_task(task_id):
+        """删除任务记录及其关联文件"""
+        task = get_task(task_id)
+        if task is None:
+            return jsonify({"error": "任务不存在"}), 404
+
+        if task["status"] == "processing":
+            return jsonify({"error": "处理中的任务无法删除，请等待完成或中断后再删除"}), 400
+
+        # 清理结果目录 results/<task_id>/
+        result_dir = os.path.join(RESULT_FOLDER, task_id)
+        if os.path.isdir(result_dir):
+            _rmtree_safe(result_dir)
+
+        # 清理上传文件（仅当无其他任务引用时）
+        input_path = task.get("input_path", "")
+        if input_path and os.path.isfile(input_path):
+            ref_count = count_tasks_by_input_path(input_path, exclude_task_id=task_id)
+            if ref_count == 0:
+                try:
+                    os.remove(input_path)
+                    logger.info(f"已清理上传文件: {input_path}")
+                except OSError:
+                    pass
+
+        db_delete_task(task_id)
+        logger.info(f"已删除任务: {task_id}")
+        return jsonify({"message": "已删除", "task_id": task_id})
+
+
+    def _rmtree_safe(path: str) -> None:
+        """安全递归删除目录"""
+        for root, dirs, files in os.walk(path, topdown=False):
+            for name in files:
+                try:
+                    os.unlink(os.path.join(root, name))
+                except OSError:
+                    pass
+            for name in dirs:
+                try:
+                    os.rmdir(os.path.join(root, name))
+                except OSError:
+                    pass
+        try:
+            os.rmdir(path)
+        except OSError:
+            pass
+
 
     # ======== 下载路由 ========
 

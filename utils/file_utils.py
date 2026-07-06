@@ -1,10 +1,28 @@
 """文件验证、清理等工具函数"""
 
 import os
-from werkzeug.utils import secure_filename
+import re
+import uuid
+
 from werkzeug.datastructures import FileStorage
 
 from config import ALLOWED_EXTENSIONS, MAX_BATCH_FILES
+
+
+def sanitize_filename(filename: str) -> str:
+    """安全化文件名：去除危险字符但保留中文等 Unicode 字符"""
+    # 移除路径分隔符和危险字符
+    filename = filename.replace("/", "_").replace("\\", "_")
+    # 移除 Windows 非法字符
+    filename = re.sub(r'[\x00-\x1f:*?"<>|]', "", filename)
+    # 去除首尾空格和点
+    filename = filename.strip(" .")
+    # 如果文件名被清空（全部是非法字符），生成一个随机名
+    if not filename or filename.startswith("."):
+        base, ext = os.path.splitext(filename)
+        if not base:
+            filename = f"{uuid.uuid4().hex[:8]}{ext}"
+    return filename
 
 
 def allowed_file(filename: str) -> bool:
@@ -46,7 +64,7 @@ def validate_batch_files(files: list[FileStorage]) -> str | None:
 
 def save_upload(file: FileStorage, upload_folder: str) -> str:
     """保存上传文件，返回保存后的绝对路径"""
-    filename = secure_filename(file.filename)
+    filename = sanitize_filename(file.filename)
     filepath = os.path.join(upload_folder, filename)
     # 处理重名
     base, ext = os.path.splitext(filename)

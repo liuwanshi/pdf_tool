@@ -100,6 +100,50 @@ def get_all_tasks() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_tasks_paginated(page: int = 1, per_page: int = 10) -> dict:
+    """分页获取任务列表"""
+    page = max(1, page)
+    per_page = max(5, min(100, per_page))
+    offset = (page - 1) * per_page
+
+    with get_db() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        rows = conn.execute(
+            "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (per_page, offset),
+        ).fetchall()
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    return {
+        "tasks": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+    }
+
+
+def count_tasks_by_input_path(input_path: str, exclude_task_id: str = "") -> int:
+    """统计引用相同上传文件的其他任务数量（排除指定任务）"""
+    if not input_path:
+        return 0
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE input_path = ? AND id != ?",
+            (input_path, exclude_task_id),
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def delete_task(task_id: str) -> bool:
+    """删除任务记录，返回是否成功"""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def mark_interrupted_tasks() -> int:
     """启动时将所有 processing 任务标记为 interrupted，返回标记数量"""
     with get_db() as conn:
