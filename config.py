@@ -4,7 +4,7 @@ import os
 import tempfile
 
 # Flask 基础配置
-SECRET_KEY = os.environ.get("SECRET_KEY", "pdf-tool-dev-secret-key")
+SECRET_KEY = os.environ.get("SECRET_KEY", "pdf-tool-dev-key--change-in-production")
 MAX_CONTENT_LENGTH = 1 * 1024 * 1024 * 1024  # 1GB 上传限制
 
 # 上传与结果存储目录
@@ -26,8 +26,8 @@ MAX_WORKERS = 3  # 并发处理任务数
 OCR_DPI = 200
 OCR_LANG = "ch"
 
-# Poppler 路径（Windows 需指定 bin 目录）
-POPPLER_PATH = r"D:\installed\poppler-26.02.0\Library\bin"
+# Poppler 路径（Windows 需指定 bin 目录，可通过环境变量覆盖）
+POPPLER_PATH = os.environ.get("POPPLER_PATH", "")
 
 # 结果文件保留时间（秒），默认 24 小时
 RESULT_RETENTION_SECONDS = 24 * 60 * 60
