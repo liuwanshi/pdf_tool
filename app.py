@@ -1,14 +1,7 @@
 """Flask 应用入口"""
 
 import os
-import sys
 import logging
-
-# 确保 stdout/stderr 使用 UTF-8（避免 Windows GBK 与终端 UTF-8 不一致导致的乱码）
-if sys.stdout.encoding != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stderr.encoding != "utf-8":
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from flask import Flask
 

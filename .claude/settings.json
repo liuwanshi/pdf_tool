@@ -31,5 +31,8 @@
      ]
     },
   "model": "haiku",
-  "autoCompactThreshold": 80
+  "autoCompactThreshold": 80,
+  "env": {
+    "PYTHONIOENCODING": "utf-8"
+  }
 }

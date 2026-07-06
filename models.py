@@ -4,7 +4,6 @@ import json
 import logging
 import sqlite3
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from config import DATABASE
@@ -36,12 +35,35 @@ def init_db() -> None:
                 result_filename TEXT,
                 input_path TEXT,
                 task_params TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
             )
         """)
         # 向后兼容：旧表可能缺少 input_path、task_params 字段
         _migrate_add_column(conn, "tasks", "input_path", "TEXT")
         _migrate_add_column(conn, "tasks", "task_params", "TEXT")
+
+        # 创建迁移跟踪表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS _migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+
+        # 一次性迁移：修正旧表 UTC → 本地时间（+8）
+        row = conn.execute(
+            "SELECT 1 FROM _migrations WHERE name = 'fix_utc_to_localtime'"
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "UPDATE tasks SET created_at = datetime(created_at, '+8 hours') "
+                "WHERE created_at IS NOT NULL"
+            )
+            conn.execute(
+                "INSERT INTO _migrations (name) VALUES ('fix_utc_to_localtime')"
+            )
+            logger.info("已修正已有任务的时间 (UTC → 本地)")
+
         conn.commit()
 
 
@@ -61,8 +83,8 @@ def create_task(original_filename: str, task_type: str,
     params_json = json.dumps(task_params, ensure_ascii=False) if task_params else None
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO tasks (id, original_filename, task_type, input_path, task_params) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO tasks (id, original_filename, task_type, input_path, task_params, created_at) "
+            "VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))",
             (task_id, original_filename, task_type, input_path, params_json),
         )
         conn.commit()
