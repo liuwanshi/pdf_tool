@@ -169,11 +169,12 @@ def compress_pdf(
     target_kb: float | None,
     output_path: str,
     tolerance: float = 0.05,
-    max_iterations: int = 5,
+    max_iterations: int = 6,
 ) -> tuple[str, float]:
     """
     压缩 PDF 至接近目标大小（尽力接近）。
 
+    策略：逐轮降低图片质量 + 降分辨率，每轮检查结果大小。
     返回 (output_path, actual_kb).
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -185,46 +186,83 @@ def compress_pdf(
         return output_path, original_kb
 
     reader = pypdf.PdfReader(input_path)
-    quality = 80
 
-    for iteration in range(max_iterations):
+    # 逐步降级：quality 从 60 → 45 → 30 → 20 → 15 → 10
+    # 同时 max_resolution 从 1920 → 1440 → 1080 → 720
+    quality_levels = [60, 45, 30, 20, 15, 10]
+    resolution_levels = [1920, 1440, 1080, 720, 720, 720]
+    best_path = None
+    best_kb = original_kb
+
+    for iteration in range(min(max_iterations, len(quality_levels))):
+        quality = quality_levels[iteration]
+        max_res = resolution_levels[iteration]
+
         writer = pypdf.PdfWriter()
         writer.add_metadata({})
         for page in reader.pages:
-            # 先加入 writer，否则图片替换操作会报 "Page must be part of a PdfWriter"
             writer.add_page(page)
             added_page = writer.pages[-1]
             added_page.compress_content_streams()
-            _compress_page_images(added_page, quality)
+            _compress_page_images(added_page, quality, max_res)
 
         with open(output_path, "wb") as f:
             writer.write(f)
         current_kb = os.path.getsize(output_path) / 1024
 
+        # 追踪最佳结果
+        if current_kb < best_kb:
+            best_kb = current_kb
+            best_path = output_path
+
         if current_kb <= target_kb * (1 + tolerance):
             break
 
-        if current_kb > target_kb:
-            quality = max(10, quality - 15)
-        else:
-            quality = min(95, quality + 5)
-
-    return output_path, current_kb
+    return best_path or output_path, best_kb
 
 
-def _compress_page_images(page: pypdf.PageObject, quality: int) -> None:
-    """压缩页面内嵌图片"""
+def _compress_page_images(page: pypdf.PageObject, quality: int, max_resolution: int = 1920) -> None:
+    """
+    压缩页面内嵌图片：
+    1. 大尺寸图片等比缩放到 max_resolution 以内
+    2. RGBA/P → RGB 转换
+    3. PNG/GIF/无损 → JPEG（仅当压缩后体积更小时才替换）
+    4. 原始数据不变（避免越压越大）
+    """
     try:
         for img_file in page.images:
             try:
                 img_data = img_file.data
+                original_size = len(img_data)
                 pil_img = Image.open(io.BytesIO(img_data))
-                if pil_img.mode in ("RGBA", "P", "LA"):
+
+                # ---- 步骤1：降分辨率 ----
+                w, h = pil_img.size
+                if max(w, h) > max_resolution:
+                    scale = max_resolution / max(w, h)
+                    new_size = (int(w * scale), int(h * scale))
+                    pil_img = pil_img.resize(new_size, Image.LANCZOS)
+
+                # ---- 步骤2：模式转换 ----
+                if pil_img.mode in ("RGBA", "P", "LA", "PA"):
                     pil_img = pil_img.convert("RGB")
-                out_bytes = io.BytesIO()
-                pil_img.save(out_bytes, format="JPEG", quality=quality)
-                img_file.replace(out_bytes.getvalue())
+
+                # ---- 步骤3：JPEG 压缩 + 替换 ----
+                # pypdf 6.x: img_file.replace() 需要 PIL Image 对象
+                # 用临时 buffer 预判压缩后大小
+                preview_buf = io.BytesIO()
+                pil_img.save(preview_buf, format="JPEG", quality=quality, optimize=True)
+                new_size = preview_buf.tell()
+
+                # ---- 步骤4：只在更小时替换 ----
+                if new_size < original_size:
+                    # 重新从 buffer 加载为 PIL Image 传给 replace
+                    preview_buf.seek(0)
+                    compressed_img = Image.open(preview_buf)
+                    img_file.replace(compressed_img)
+                # 否则保留原始图片（PNG 可能已是最优）
+
             except Exception:
-                pass
+                pass  # 单张图片失败不影响整体
     except Exception:
-        pass
+        pass  # 页面无图片或图片提取失败
