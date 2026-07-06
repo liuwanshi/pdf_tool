@@ -191,9 +191,11 @@ def compress_pdf(
         writer = pypdf.PdfWriter()
         writer.add_metadata({})
         for page in reader.pages:
-            page.compress_content_streams()
-            _compress_page_images(page, quality)
+            # 先加入 writer，否则图片替换操作会报 "Page must be part of a PdfWriter"
             writer.add_page(page)
+            added_page = writer.pages[-1]
+            added_page.compress_content_streams()
+            _compress_page_images(added_page, quality)
 
         with open(output_path, "wb") as f:
             writer.write(f)
