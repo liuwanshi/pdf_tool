@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}任务列表 - PDF 处理工具{% endblock %}
+{% block content %}
+
+<h2 class="mb-4">任务列表</h2>
+
+<div class="table-responsive">
+    <table class="table table-hover" id="tasks-table">
+        <thead>
+            <tr>
+                <th>文件名</th>
+                <th>类型</th>
+                <th>进度</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr id="tasks-empty">
+                <td colspan="6" class="text-center text-muted">暂无任务</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="text-muted small text-end">
+    <span id="poll-status">自动刷新中...</span>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+const TYPE_MAP = {
+    ocr: 'OCR 可搜索 PDF',
+    compress: 'PDF 压缩',
+    split: 'PDF 拆分',
+    merge: '合并 PDF',
+    batch_ocr: '批量 OCR',
+};
+
+function statusBadge(status) {
+    if (status === 'processing') return '<span class="badge bg-warning text-dark">处理中</span>';
+    if (status === 'completed')  return '<span class="badge bg-success">已完成</span>';
+    if (status === 'failed')     return '<span class="badge bg-danger">任务失败</span>';
+    if (status === 'interrupted') return '<span class="badge bg-secondary">已中断</span>';
+    return `<span class="badge bg-light text-dark">${escapeHtml(status)}</span>`;
+}
+
+function actionButtons(t) {
+    let html = '';
+    if (t.status === 'completed') {
+        html += `<a href="/download/${t.id}" class="btn btn-sm btn-success me-1">下载</a>`;
+    }
+    if (t.status === 'failed' || t.status === 'interrupted') {
+        html += `<button class="btn btn-sm btn-outline-primary retry-btn" data-task-id="${t.id}">重试</button>`;
+    }
+    return html;
+}
+
+async function retryTask(taskId, btn) {
+    btn.disabled = true;
+    btn.textContent = '提交中...';
+    try {
+        const resp = await fetch(`/api/task/${taskId}/retry`, { method: 'POST' });
+        const result = await resp.json();
+        if (result.error) {
+            alert('重试失败: ' + result.error);
+            btn.disabled = false;
+            btn.textContent = '重试';
+        } else {
+            btn.textContent = '已提交';
+            btn.classList.replace('btn-outline-primary', 'btn-outline-success');
+            // 立即刷新列表
+            pollTasks();
+        }
+    } catch (err) {
+        alert('重试请求失败: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = '重试';
+    }
+}
+
+async function pollTasks() {
+    try {
+        const resp = await fetch('/api/tasks');
+        const tasks = await resp.json();
+        const tbody = document.querySelector('#tasks-table tbody');
+        const emptyRow = document.getElementById('tasks-empty');
+
+        if (tasks.length === 0) {
+            tbody.innerHTML = '';
+            tbody.appendChild(emptyRow);
+            return;
+        }
+
+        if (emptyRow) emptyRow.remove();
+
+        tbody.innerHTML = tasks.map(t => `
+            <tr>
+                <td title="${escapeHtml(t.id)}">${escapeHtml(t.original_filename)}</td>
+                <td>${TYPE_MAP[t.task_type] || t.task_type}</td>
+                <td>
+                    <div class="progress" style="height: 16px;">
+                        <div class="progress-bar${t.status === 'interrupted' ? ' bg-secondary' : ''}"
+                             style="width: ${t.progress}%">${t.progress}%</div>
+                    </div>
+                </td>
+                <td>${statusBadge(t.status)}${t.error_message ? '<br><small class="' +
+                    (t.status === 'failed' || t.status === 'interrupted' ? 'text-danger' : 'text-muted')
+                    + '">' + escapeHtml(t.error_message) + '</small>' : ''}</td>
+                <td>${t.created_at || '-'}</td>
+                <td>${actionButtons(t)}</td>
+            </tr>
+        `).join('');
+
+        // 绑定重试按钮事件
+        tbody.querySelectorAll('.retry-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                retryTask(this.dataset.taskId, this);
+            });
+        });
+
+        document.getElementById('poll-status').textContent =
+            '上次刷新: ' + new Date().toLocaleTimeString();
+    } catch (err) {
+        document.getElementById('poll-status').textContent = '刷新失败: ' + err.message;
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 立即加载 + 每2秒轮询
+pollTasks();
+setInterval(pollTasks, 2000);
+</script>
+{% endblock %}

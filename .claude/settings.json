@@ -1,0 +1,35 @@
+{
+  "permissions": {
+   "allow": [
+      "Read", "Glob", "Grep", "Edit", "MultiEdit",
+      "Write(src/**)", "Write(tests/**)",
+      "Bash(npm *)", "Bash(pnpm *)", "Bash(git status)", "Bash(git diff *)",
+      "Bash(git log *)", "Bash(git add *)", "Bash(git commit *)",
+      "Bash(cat *)", "Bash(head *)", "Bash(tail *)", "Bash(find *)"
+    ],
+    "deny": [
+      "Read(**/.env*)", "Read(**/*.pem)", "Read(**/*.key)",
+      "Read(**/secrets/**)", "Read(**/credentials/**)",
+      "Write(**/.env*)", "Write(**/secrets/**)",
+      "Write(package-lock.json)", "Write(.github/workflows/*)",
+      "Bash(rm -rf *)", "Bash(sudo *)", "Bash(git push *)",
+      "Bash(git merge *)", "Bash(git rebase *)",
+      "Bash(docker *)", "Bash(curl * | sh)", "Bash(chmod *)"
+    ]
+  },
+    "hooks": {
+   "PostToolUse": [
+     {
+      "matcher": "Write|Edit",
+      "hooks": [
+        {
+         "type": "command",
+         "command": "echo \"文件已修改，建议检查一下改了什么\""
+        }
+      ]
+     }
+     ]
+    },
+  "model": "haiku",
+  "autoCompactThreshold": 80
+}

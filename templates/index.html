@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}单文件处理 - PDF 处理工具{% endblock %}
+{% block content %}
+
+<h2 class="mb-4">单文件处理</h2>
+
+<div class="row">
+    <!-- 功能1: OCR -->
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">🔍 OCR 可搜索 PDF</h5>
+                <p class="card-text text-muted">将扫描件/图片转为可搜索、可复制文字的 PDF。</p>
+                <form class="task-form" data-task-type="ocr">
+                    <div class="mb-3">
+                        <input type="file" class="form-control" name="file" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">开始 OCR</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 功能2: 压缩 -->
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">📦 PDF 压缩</h5>
+                <p class="card-text text-muted">压缩 PDF 至目标大小（尽力接近）。</p>
+                <form class="task-form" data-task-type="compress">
+                    <div class="mb-3">
+                        <input type="file" class="form-control" name="file" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">目标大小 (KB)，留空则自动压缩</label>
+                        <input type="number" class="form-control" name="target_kb" min="1" placeholder="如 1024">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">开始压缩</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 功能3: 拆分 -->
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">✂️ PDF 拆分提取</h5>
+                <p class="card-text text-muted">按奇偶页或自定义范围拆分 PDF。</p>
+                <form class="task-form" data-task-type="split">
+                    <div class="mb-3">
+                        <input type="file" class="form-control" name="file" accept=".pdf" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">拆分方式</label>
+                        <select class="form-select" name="mode">
+                            <option value="range">自定义范围（如 1-3,5,7-9）</option>
+                            <option value="odd">仅奇数页</option>
+                            <option value="even">仅偶数页</option>
+                        </select>
+                    </div>
+                    <div class="mb-3 page-range-input">
+                        <label class="form-label">页码范围</label>
+                        <input type="text" class="form-control" name="page_range" placeholder="如: 1-3,5,7-9">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">开始拆分</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 任务进度提示 -->
+<div id="task-toast" class="alert alert-info d-none mt-3" role="alert">
+    <span id="task-toast-msg"></span>
+    <a id="task-toast-link" href="/tasks">查看任务列表 →</a>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.task-form').forEach(form => {
+    // 显示/隐藏页码范围输入
+    const modeSelect = form.querySelector('select[name="mode"]');
+    const rangeInput = form.querySelector('.page-range-input');
+    if (modeSelect && rangeInput) {
+        modeSelect.addEventListener('change', () => {
+            rangeInput.style.display = modeSelect.value === 'range' ? 'block' : 'none';
+        });
+    }
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const taskType = form.dataset.taskType;
+        const btn = form.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = '提交中...';
+
+        try {
+            const fileInput = form.querySelector('input[type="file"]');
+            const file = fileInput.files[0];
+            if (!file) { alert('请选择文件'); btn.disabled = false; btn.textContent = '开始'; return; }
+
+            // 先上传文件
+            const uploadForm = new FormData();
+            uploadForm.append('file', file);
+            const uploadResp = await fetch('/upload/single', { method: 'POST', body: uploadForm });
+            const uploadResult = await uploadResp.json();
+            if (uploadResult.error) { alert(uploadResult.error); btn.disabled = false; btn.textContent = '开始'; return; }
+
+            // 创建任务
+            const taskData = {
+                task_type: taskType,
+                filepath: uploadResult.filepath,
+                filename: uploadResult.filename,
+            };
+            if (taskType === 'compress') {
+                const tkb = form.querySelector('input[name="target_kb"]').value;
+                if (tkb) taskData.target_kb = parseFloat(tkb);
+            }
+            if (taskType === 'split') {
+                taskData.mode = form.querySelector('select[name="mode"]').value;
+                taskData.page_range = form.querySelector('input[name="page_range"]').value || null;
+            }
+
+            const taskResp = await fetch('/api/task/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(taskData)
+            });
+            const taskResult = await taskResp.json();
+            if (taskResult.error) { alert(taskResult.error); btn.disabled = false; btn.textContent = '开始'; return; }
+
+            // 显示成功提示
+            const toast = document.getElementById('task-toast');
+            toast.classList.remove('d-none');
+            document.getElementById('task-toast-msg').textContent =
+                `任务已创建 (ID: ${taskResult.task_id.slice(0, 8)}...)，正在处理中...`;
+        } catch (err) {
+            alert('提交失败: ' + err.message);
+        }
+        btn.disabled = false;
+        btn.textContent = '开始';
+    });
+});
+</script>
+{% endblock %}

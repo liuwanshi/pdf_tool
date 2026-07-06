@@ -1,0 +1,42 @@
+/* 自定义样式 */
+
+body {
+    background-color: #f8f9fa;
+}
+
+.card {
+    transition: box-shadow 0.2s;
+    border: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+.card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.progress {
+    min-width: 80px;
+}
+
+/* 文件排序列表 */
+.sortable-list .list-group-item {
+    cursor: grab;
+    font-size: 0.9rem;
+}
+
+.sortable-list .list-group-item:active {
+    cursor: grabbing;
+}
+
+/* 任务 Toast */
+#task-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1050;
+    max-width: 400px;
+}
+
+/* 导航激活状态（由页面自己处理） */
+.navbar .nav-link.active {
+    font-weight: 600;
+}

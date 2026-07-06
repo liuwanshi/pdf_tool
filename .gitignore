@@ -1,0 +1,33 @@
+# Python 虚拟环境
+.venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# SQLite 数据库
+tasks.db
+tasks.db-shm
+tasks.db-wal
+
+# 上传和结果文件
+uploads/*
+results/*
+!uploads/.gitkeep
+!results/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# AI 工具本地配置
+.claude/settings.local.json
+
+# 环境变量
+.env
+.env.local
