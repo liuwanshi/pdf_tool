@@ -40,6 +40,7 @@
                         <input type="file" class="form-control" name="files" multiple
                                accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" required>
                     </div>
+                    <div class="sortable-list mb-3" id="batch-ocr-file-list"></div>
                     <button type="submit" class="btn btn-primary w-100">开始批量 OCR</button>
                 </form>
             </div>
@@ -60,16 +61,43 @@ document.querySelectorAll('.batch-form').forEach(form => {
     const fileInput = form.querySelector('input[type="file"]');
     const listEl = form.querySelector('.sortable-list');
 
+    // 渲染文件列表（含删除按钮）
+    function renderFileList() {
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        const files = fileInput.files;
+        if (files.length === 0) return;
+        Array.from(files).forEach((f, i) => {
+            listEl.innerHTML += `<div class="list-group-item d-flex justify-content-between align-items-center">
+                <span>${i + 1}. ${f.name}</span>
+                <span>
+                    <small class="text-muted me-2">${(f.size / 1024).toFixed(1)} KB</small>
+                    <button type="button" class="btn btn-sm btn-outline-danger file-remove-btn" data-index="${i}" title="移除此文件">&times;</button>
+                </span>
+            </div>`;
+        });
+    }
+
+    // 删除文件（DataTransfer API）
+    function removeFile(index) {
+        const dt = new DataTransfer();
+        Array.from(fileInput.files).forEach((f, i) => {
+            if (i !== index) dt.items.add(f);
+        });
+        fileInput.files = dt.files;
+        renderFileList();
+    }
+
     // 显示已选文件列表
     if (fileInput && listEl) {
-        fileInput.addEventListener('change', () => {
-            listEl.innerHTML = '';
-            Array.from(fileInput.files).forEach((f, i) => {
-                listEl.innerHTML += `<div class="list-group-item d-flex justify-content-between">
-                    <span>${i + 1}. ${f.name}</span>
-                    <small class="text-muted">${(f.size / 1024).toFixed(1)} KB</small>
-                </div>`;
-            });
+        fileInput.addEventListener('change', renderFileList);
+
+        // 委托处理删除按钮点击
+        listEl.addEventListener('click', (e) => {
+            const btn = e.target.closest('.file-remove-btn');
+            if (btn) {
+                removeFile(parseInt(btn.dataset.index));
+            }
         });
     }
 
