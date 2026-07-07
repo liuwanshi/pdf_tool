@@ -61,13 +61,16 @@ document.querySelectorAll('.batch-form').forEach(form => {
     const fileInput = form.querySelector('input[type="file"]');
     const listEl = form.querySelector('.sortable-list');
 
-    // 渲染文件列表（含删除按钮）
+    // 主数据：累积文件数组（允许追加/删除）
+    let accumulatedFiles = [];
+    const fileNameSet = new Set();  // 快速去重
+
+    // 渲染文件列表
     function renderFileList() {
         if (!listEl) return;
         listEl.innerHTML = '';
-        const files = fileInput.files;
-        if (files.length === 0) return;
-        Array.from(files).forEach((f, i) => {
+        if (accumulatedFiles.length === 0) return;
+        accumulatedFiles.forEach((f, i) => {
             listEl.innerHTML += `<div class="list-group-item d-flex justify-content-between align-items-center">
                 <span>${i + 1}. ${f.name}</span>
                 <span>
@@ -78,21 +81,47 @@ document.querySelectorAll('.batch-form').forEach(form => {
         });
     }
 
-    // 删除文件（DataTransfer API）
+    // 删除单个文件
     function removeFile(index) {
-        const dt = new DataTransfer();
-        Array.from(fileInput.files).forEach((f, i) => {
-            if (i !== index) dt.items.add(f);
-        });
-        fileInput.files = dt.files;
+        const removed = accumulatedFiles[index];
+        fileNameSet.delete(removed.name);
+        accumulatedFiles.splice(index, 1);
         renderFileList();
     }
 
-    // 显示已选文件列表
-    if (fileInput && listEl) {
-        fileInput.addEventListener('change', renderFileList);
+    // 追加文件（去重）
+    function appendFiles(newFiles) {
+        const skipped = [];
+        let added = 0;
+        for (const f of newFiles) {
+            if (fileNameSet.has(f.name)) {
+                skipped.push(f.name);
+                continue;
+            }
+            if (accumulatedFiles.length >= 10) {
+                alert('最多上传 10 个文件，已忽略超出部分');
+                break;
+            }
+            fileNameSet.add(f.name);
+            accumulatedFiles.push(f);
+            added++;
+        }
+        if (skipped.length > 0) {
+            alert('以下文件已存在，跳过：\n' + skipped.join('\n'));
+        }
+        if (added > 0) renderFileList();
+    }
 
-        // 委托处理删除按钮点击
+    if (fileInput && listEl) {
+        // 每次选择后追加到累积列表，然后清空 input 以允许再次选择同名文件
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                appendFiles(fileInput.files);
+                fileInput.value = '';  // 清空，下次选同样文件也能触发 change
+            }
+        });
+
+        // 委托处理删除按钮
         listEl.addEventListener('click', (e) => {
             const btn = e.target.closest('.file-remove-btn');
             if (btn) {
@@ -109,13 +138,11 @@ document.querySelectorAll('.batch-form').forEach(form => {
         btn.textContent = '提交中...';
 
         try {
-            const files = form.querySelector('input[type="file"]').files;
-            if (files.length === 0) { alert('请选择文件'); btn.disabled = false; btn.textContent = '开始'; return; }
-            if (files.length > 10) { alert('最多上传 10 个文件'); btn.disabled = false; btn.textContent = '开始'; return; }
+            if (accumulatedFiles.length === 0) { alert('请选择文件'); btn.disabled = false; btn.textContent = '开始'; return; }
 
-            // 批量上传
+            // 批量上传（直接用累积数组）
             const uploadForm = new FormData();
-            for (const f of files) { uploadForm.append('files', f); }
+            for (const f of accumulatedFiles) { uploadForm.append('files', f); }
             const uploadResp = await fetch('/upload/batch', { method: 'POST', body: uploadForm });
             const uploadResult = await uploadResp.json();
             if (uploadResult.error) { alert(uploadResult.error); btn.disabled = false; btn.textContent = '开始'; return; }
@@ -138,6 +165,11 @@ document.querySelectorAll('.batch-form').forEach(form => {
             });
             const taskResult = await taskResp.json();
             if (taskResult.error) { alert(taskResult.error); btn.disabled = false; btn.textContent = '开始'; return; }
+
+            // 提交成功后清空
+            accumulatedFiles = [];
+            fileNameSet.clear();
+            renderFileList();
 
             const toast = document.getElementById('task-toast');
             toast.classList.remove('d-none');
