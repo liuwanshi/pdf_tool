@@ -13,9 +13,13 @@
                 <p class="card-text text-muted">最多 10 个文件，按顺序合并为一个 PDF，可选压缩。</p>
                 <form class="batch-form" data-task-type="merge">
                     <div class="mb-3">
-                        <label class="form-label">选择文件（可多选，支持拖拽排序） <span class="file-count text-muted small"></span></label>
-                        <input type="file" class="form-control" name="files" multiple
-                               accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff">
+                        <label class="form-label">选择文件（可多选，支持拖拽排序）</label>
+                        <div class="input-group">
+                            <button type="button" class="btn btn-outline-secondary file-pick-btn">选择文件</button>
+                            <span class="form-control file-status-text" style="background:#e9ecef;">未选择文件</span>
+                            <input type="file" class="d-none" name="files" multiple
+                                   accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff">
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">目标大小 (KB)，留空不压缩</label>
@@ -36,9 +40,13 @@
                 <p class="card-text text-muted">最多 10 个文件，逐个 OCR 后可搜索 PDF，结果打包 ZIP。</p>
                 <form class="batch-form" data-task-type="batch_ocr">
                     <div class="mb-3">
-                        <label class="form-label">选择文件（可多选） <span class="file-count text-muted small"></span></label>
-                        <input type="file" class="form-control" name="files" multiple
-                               accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff">
+                        <label class="form-label">选择文件（可多选）</label>
+                        <div class="input-group">
+                            <button type="button" class="btn btn-outline-secondary file-pick-btn">选择文件</button>
+                            <span class="form-control file-status-text" style="background:#e9ecef;">未选择文件</span>
+                            <input type="file" class="d-none" name="files" multiple
+                                   accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff">
+                        </div>
                     </div>
                     <div class="sortable-list mb-3" id="batch-ocr-file-list"></div>
                     <button type="submit" class="btn btn-primary w-100">开始批量 OCR</button>
@@ -65,15 +73,22 @@ document.querySelectorAll('.batch-form').forEach(form => {
     let accumulatedFiles = [];
     const fileNameSet = new Set();  // 快速去重
 
+    // 自定义文件选择器按钮 → 触发隐藏的 input
+    const pickBtn = form.querySelector('.file-pick-btn');
+    const statusText = form.querySelector('.file-status-text');
+    if (pickBtn && fileInput) {
+        pickBtn.addEventListener('click', () => fileInput.click());
+    }
+
     // 渲染文件列表
     function renderFileList() {
         if (!listEl) return;
         listEl.innerHTML = '';
 
-        // 更新标签中的文件计数
-        const countEl = form.querySelector('.file-count');
-        if (countEl) {
-            countEl.textContent = accumulatedFiles.length > 0 ? `(${accumulatedFiles.length} 个文件)` : '';
+        // 更新状态文字
+        if (statusText) {
+            const n = accumulatedFiles.length;
+            statusText.textContent = n > 0 ? `已选择 ${n} 个文件` : '未选择文件';
         }
 
         if (accumulatedFiles.length === 0) return;
