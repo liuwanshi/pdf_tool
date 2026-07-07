@@ -115,9 +115,11 @@ document.querySelectorAll('.batch-form').forEach(form => {
     if (fileInput && listEl) {
         // 每次选择后追加到累积列表，然后清空 input 以允许再次选择同名文件
         fileInput.addEventListener('change', () => {
-            if (fileInput.files.length > 0) {
-                appendFiles(fileInput.files);
-                fileInput.value = '';  // 清空，下次选同样文件也能触发 change
+            const files = Array.from(fileInput.files);
+            if (files.length > 0) {
+                appendFiles(files);
+                // 清空 input（try/catch 兼容不同浏览器对 value setter 的限制）
+                try { fileInput.value = null; } catch(e) {}
             }
         });
 
