@@ -13,7 +13,7 @@
                 <p class="card-text text-muted">最多 10 个文件，按顺序合并为一个 PDF，可选压缩。</p>
                 <form class="batch-form" data-task-type="merge">
                     <div class="mb-3">
-                        <label class="form-label">选择文件（可多选，支持拖拽排序）</label>
+                        <label class="form-label">选择文件（可多选，支持拖拽排序） <span class="file-count text-muted small"></span></label>
                         <input type="file" class="form-control" name="files" multiple
                                accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" required>
                     </div>
@@ -36,7 +36,7 @@
                 <p class="card-text text-muted">最多 10 个文件，逐个 OCR 后可搜索 PDF，结果打包 ZIP。</p>
                 <form class="batch-form" data-task-type="batch_ocr">
                     <div class="mb-3">
-                        <label class="form-label">选择文件（可多选）</label>
+                        <label class="form-label">选择文件（可多选） <span class="file-count text-muted small"></span></label>
                         <input type="file" class="form-control" name="files" multiple
                                accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff" required>
                     </div>
@@ -69,6 +69,13 @@ document.querySelectorAll('.batch-form').forEach(form => {
     function renderFileList() {
         if (!listEl) return;
         listEl.innerHTML = '';
+
+        // 更新标签中的文件计数
+        const countEl = form.querySelector('.file-count');
+        if (countEl) {
+            countEl.textContent = accumulatedFiles.length > 0 ? `(${accumulatedFiles.length} 个文件)` : '';
+        }
+
         if (accumulatedFiles.length === 0) return;
         accumulatedFiles.forEach((f, i) => {
             listEl.innerHTML += `<div class="list-group-item d-flex justify-content-between align-items-center">
