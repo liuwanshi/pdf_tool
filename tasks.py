@@ -55,7 +55,7 @@ def _update_progress(task_id: str, progress: int, **kwargs) -> None:
 
 def _fail_task(task_id: str, error: str) -> None:
     """标记任务失败"""
-    logger.error(f"任务 {task_id} 失败: {error}")
+    logger.error(f"任务失败: task_id={task_id}, error={error}")
     update_task(task_id, status="failed", error_message=error)
 
 
@@ -65,30 +65,36 @@ def run_task(task_id: str, func, *args) -> None:
     def wrapper():
         try:
             func(*args)
-        except Exception as e:
-            traceback.print_exc()
-            _fail_task(task_id, str(e))
+        except Exception:
+            logger.exception(f"轻量任务异常: task_id={task_id}")
+            _fail_task(task_id, str(traceback.format_exc()))
 
     executor.submit(wrapper)
 
 
 def _monitor_subprocess(task_id: str, proc: subprocess.Popen) -> None:
-    """监控子进程完成状态"""
+    """监控子进程完成状态（在线程中等待进程退出并检查结果）"""
     def wait_and_check():
         ret = proc.wait()
         _cleanup_worker(task_id)
-        if ret != 0:
+        if ret == 0:
+            logger.info(f"OCR 子进程正常退出: task_id={task_id}, pid={proc.pid}")
+        else:
             from models import get_task
             task = get_task(task_id)
             if task and task["status"] != "failed":
                 stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-                _fail_task(task_id, stderr[:500] if stderr else f"OCR worker 异常退出 (code={ret})")
+                logger.error(
+                    f"OCR 子进程异常退出: task_id={task_id}, pid={proc.pid}, "
+                    f"exit_code={ret}, stderr={stderr[:2000]}"
+                )
+                _fail_task(task_id, stderr[:2000] if stderr else f"OCR worker 异常退出 (code={ret})")
     executor.submit(wait_and_check)
 
 
 def run_ocr_task(task_id: str, input_path: str, original_filename: str) -> None:
     """通过 subprocess 启动 OCR worker 独立进程"""
-    logger.info(f"启动 OCR worker: task_id={task_id}")
+    logger.info(f"OCR 任务开始: task_id={task_id}, file={original_filename}")
     try:
         proc = subprocess.Popen(
             [_PYTHON_EXE, _OCR_WORKER,
@@ -100,14 +106,16 @@ def run_ocr_task(task_id: str, input_path: str, original_filename: str) -> None:
             stderr=subprocess.PIPE,
         )
         _worker_processes[task_id] = proc
+        logger.info(f"OCR 子进程已启动: task_id={task_id}, pid={proc.pid}")
         _monitor_subprocess(task_id, proc)
-    except Exception as e:
-        _fail_task(task_id, f"启动 OCR worker 失败: {e}")
+    except Exception:
+        logger.exception(f"启动 OCR worker 失败: task_id={task_id}")
+        _fail_task(task_id, f"启动 OCR worker 失败")
 
 
 def run_batch_ocr_task(task_id: str, input_paths: list[str], file_names: list[str]) -> None:
     """通过 subprocess 启动批量 OCR worker 独立进程"""
-    logger.info(f"启动批量 OCR worker: task_id={task_id}, {len(input_paths)} 文件")
+    logger.info(f"批量 OCR 任务开始: task_id={task_id}, 文件数={len(input_paths)}")
     try:
         proc = subprocess.Popen(
             [_PYTHON_EXE, _OCR_WORKER,
@@ -119,9 +127,11 @@ def run_batch_ocr_task(task_id: str, input_paths: list[str], file_names: list[st
             stderr=subprocess.PIPE,
         )
         _worker_processes[task_id] = proc
+        logger.info(f"批量 OCR 子进程已启动: task_id={task_id}, pid={proc.pid}")
         _monitor_subprocess(task_id, proc)
-    except Exception as e:
-        _fail_task(task_id, f"启动批量 OCR worker 失败: {e}")
+    except Exception:
+        logger.exception(f"启动批量 OCR worker 失败: task_id={task_id}")
+        _fail_task(task_id, f"启动批量 OCR worker 失败")
 
 
 # ============ 轻量任务（在线程池执行） ============
@@ -129,6 +139,7 @@ def run_batch_ocr_task(task_id: str, input_paths: list[str], file_names: list[st
 
 def compress_task(task_id: str, input_path: str, original_filename: str, target_kb: float | None) -> None:
     """单文件压缩"""
+    logger.info(f"压缩任务开始: task_id={task_id}, file={original_filename}, 目标={target_kb}KB")
     _update_progress(task_id, 10)
 
     base_name = os.path.splitext(original_filename)[0]
@@ -143,11 +154,10 @@ def compress_task(task_id: str, input_path: str, original_filename: str, target_
         input_path = pdf_path
 
     _update_progress(task_id, 30)
+    logger.debug(f"压缩进行中(30%): task_id={task_id}")
 
     result_path, actual_kb = compress_pdf(input_path, target_kb, output_path)
     original_kb = get_file_size_kb(input_path)
-
-    logger.info(f"压缩完成: {original_kb:.0f}KB → {actual_kb:.0f}KB (目标: {target_kb}KB)")
 
     _update_progress(
         task_id, 100, status="completed",
@@ -156,6 +166,10 @@ def compress_task(task_id: str, input_path: str, original_filename: str, target_
         error_message=(
             f"压缩结果: {actual_kb:.0f}KB (目标: {target_kb}KB)，原始: {original_kb:.0f}KB"
         ) if target_kb else None,
+    )
+    logger.info(
+        f"压缩任务完成: task_id={task_id}, "
+        f"{original_kb:.0f}KB → {actual_kb:.0f}KB (目标: {target_kb}KB)"
     )
 
 
@@ -168,6 +182,7 @@ def split_task(
     compress_targets: list[float | None] | None,
 ) -> None:
     """PDF 拆分提取，可选压缩，结果打包 ZIP"""
+    logger.info(f"拆分任务开始: task_id={task_id}, file={original_filename}, mode={mode}")
     _update_progress(task_id, 10)
 
     base_name = os.path.splitext(original_filename)[0]
@@ -176,6 +191,7 @@ def split_task(
 
     split_dir = os.path.join(work_dir, "split")
     split_files = split_pdf_by_mode(input_path, mode, page_range, split_dir)
+    logger.debug(f"拆分完成: task_id={task_id}, 生成 {len(split_files)} 个子文件")
     _update_progress(task_id, 50)
 
     final_files = []
@@ -200,6 +216,7 @@ def split_task(
         result_path=zip_path,
         result_filename=f"{base_name}_split.zip",
     )
+    logger.info(f"拆分任务完成: task_id={task_id}, 结果={len(final_files)} 个文件")
 
 
 def merge_task(
@@ -209,6 +226,7 @@ def merge_task(
     target_kb: float | None,
 ) -> None:
     """批量合并（可压缩）"""
+    logger.info(f"合并任务开始: task_id={task_id}, 文件数={len(input_paths)}")
     _update_progress(task_id, 10)
 
     work_dir = os.path.join(RESULT_FOLDER, task_id)
@@ -243,3 +261,4 @@ def merge_task(
         result_path=result_path,
         result_filename=result_filename,
     )
+    logger.info(f"合并任务完成: task_id={task_id}, 结果={result_filename}")

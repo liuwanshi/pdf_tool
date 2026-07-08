@@ -24,6 +24,7 @@ from utils.pdf_utils import image_to_pdf
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] ocr_worker: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("ocr_worker")
 
@@ -58,7 +59,7 @@ def do_ocr(task_id: str, input_path: str, original_filename: str) -> bool:
     doc = fitz.open(input_path)
     zoom = 2.0
     total = doc.page_count
-    logger.info(f"开始 OCR: {total} 页, {input_path}")
+    logger.info(f"开始 OCR: task_id={task_id}, {total} 页, {input_path}")
 
     images = []
     for page in doc:
@@ -74,8 +75,14 @@ def do_ocr(task_id: str, input_path: str, original_filename: str) -> bool:
         page = doc[page_idx]
         img = images[page_idx]
 
-        # OCR 识别
+        # OCR 识别（含耗时统计，超过 30s 输出警告）
+        import time
+        t0 = time.perf_counter()
         result = ocr.predict(img)
+        t1 = time.perf_counter()
+        elapsed = t1 - t0
+        if elapsed > 30:
+            logger.warning(f"单页 OCR 耗时过长: {elapsed:.1f}s (第 {page_idx + 1}/{total} 页)")
         page_result = result[0]
 
         items = []
@@ -149,15 +156,17 @@ def do_batch_ocr(task_id: str, input_paths: list[str], file_names: list[str]) ->
     zoom = 2.0
 
     for i, (fp, fname) in enumerate(zip(input_paths, file_names)):
-        base_name = Path(fname).stem
+        try:
+            base_name = Path(fname).stem
+            logger.info(f"批量 OCR 文件 {i+1}/{total}: {fname}")
 
-        ext = os.path.splitext(fp)[1].lower()
-        if ext not in (".pdf",):
-            pdf_path = os.path.join(work_dir, f"_batch_{i}.pdf")
-            image_to_pdf(fp, pdf_path)
-            fp = pdf_path
+            ext = os.path.splitext(fp)[1].lower()
+            if ext not in (".pdf",):
+                pdf_path = os.path.join(work_dir, f"_batch_{i}.pdf")
+                image_to_pdf(fp, pdf_path)
+                fp = pdf_path
 
-        doc = fitz.open(fp)
+            doc = fitz.open(fp)
         images = []
         for page in doc:
             mat = fitz.Matrix(zoom, zoom)
@@ -199,6 +208,10 @@ def do_batch_ocr(task_id: str, input_paths: list[str], file_names: list[str]) ->
 
         progress = 10 + int((i + 1) / total * 70)
         update_task(task_id, progress=progress)
+
+        except Exception:
+            logger.exception(f"批量 OCR 单文件处理失败: {fname}, task_id={task_id}")
+            # 单个文件失败不中断整体流程
 
     # ZIP 打包
     zip_path = os.path.join(work_dir, "batch_ocr_results.zip")

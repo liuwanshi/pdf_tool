@@ -3,10 +3,11 @@
 import json
 import logging
 import os
+import time
 import uuid
 
 from flask import (
-    Flask, render_template, request, jsonify, send_file, abort,
+    Flask, render_template, request, jsonify, send_file, abort, g,
 )
 
 from config import UPLOAD_FOLDER, RESULT_FOLDER
@@ -19,6 +20,41 @@ logger = logging.getLogger(__name__)
 
 def register_routes(app: Flask) -> None:
     """注册所有路由到 Flask 应用"""
+
+    # ======== 统一请求日志（before / after hooks） ========
+
+    @app.before_request
+    def _log_request_entry():
+        """记录 API 请求入口（仅 /api/ 和 /upload/ 路径）"""
+        if request.path.startswith("/api/") or request.path.startswith("/upload/"):
+            g.request_start = time.perf_counter()
+            # 脱敏：不记录文件内容，只记录请求元信息
+            logger.info(
+                f"请求开始: {request.method} {request.path}"
+                + (f"?{request.query_string.decode('utf-8')}" if request.query_string else "")
+            )
+
+    @app.after_request
+    def _log_request_exit(response):
+        """记录 API 请求出口（状态码 + 耗时）"""
+        if request.path.startswith("/api/") or request.path.startswith("/upload/"):
+            elapsed = 0
+            if hasattr(g, "request_start"):
+                elapsed = (time.perf_counter() - g.request_start) * 1000
+            logger.info(
+                f"请求完成: {request.method} {request.path} → {response.status_code} ({elapsed:.0f}ms)"
+            )
+            # 慢请求告警：超过 3 秒输出 WARNING
+            if elapsed > 3000:
+                logger.warning(f"慢请求: {request.method} {request.path} 耗时 {elapsed:.0f}ms")
+            # 高频轮询端点降级为 DEBUG（/api/tasks 每 3s 轮询一次）
+            if request.path == "/api/tasks":
+                for handler in logger.handlers:
+                    record = logging.LogRecord(
+                        logger.name, logging.DEBUG, request.path, 0,
+                        f"轮询刷新 (HTTP {response.status_code})", None, None
+                    )
+        return response
 
     # ======== 页面路由 ========
 
@@ -41,9 +77,11 @@ def register_routes(app: Flask) -> None:
         file = request.files.get("file")
         error = validate_file(file)
         if error:
+            logger.warning(f"单文件上传被拒: {error}")
             return jsonify({"error": error}), 400
 
         filepath = save_upload(file, UPLOAD_FOLDER)
+        logger.info(f"单文件上传成功: {file.filename} → {filepath}")
         return jsonify({"filepath": filepath, "filename": file.filename})
 
     @app.route("/upload/batch", methods=["POST"])
@@ -51,6 +89,7 @@ def register_routes(app: Flask) -> None:
         files = request.files.getlist("files")
         error = validate_batch_files(files)
         if error:
+            logger.warning(f"批量上传被拒: {error}")
             return jsonify({"error": error}), 400
 
         results = []
@@ -58,6 +97,7 @@ def register_routes(app: Flask) -> None:
             if f and f.filename:
                 filepath = save_upload(f, UPLOAD_FOLDER)
                 results.append({"filepath": filepath, "filename": f.filename})
+        logger.info(f"批量上传成功: {len(results)} 个文件")
         return jsonify({"files": results})
 
     # ======== 任务 API ========
@@ -66,18 +106,21 @@ def register_routes(app: Flask) -> None:
     def api_create_task():
         """创建处理任务"""
         data = request.get_json() or {}
-
         task_type = data.get("task_type")
+
         if not task_type:
             return jsonify({"error": "缺少 task_type"}), 400
 
         try:
             task_id = _create_and_run_task(task_type, data)
+            logger.info(f"任务创建成功: task_id={task_id}, type={task_type}")
             return jsonify({"task_id": task_id})
         except ValueError as e:
+            logger.warning(f"任务创建参数错误: {e}")
             return jsonify({"error": str(e)}), 400
-        except Exception as e:
-            return jsonify({"error": f"创建任务失败: {e}"}), 500
+        except Exception:
+            logger.exception(f"任务创建异常: type={task_type}, data={data}")
+            return jsonify({"error": "创建任务失败，请查看日志"}), 500
 
     @app.route("/api/task/<task_id>")
     def api_get_task(task_id):
@@ -104,14 +147,13 @@ def register_routes(app: Flask) -> None:
         if task["status"] not in retryable:
             return jsonify({"error": f"只能重试失败或中断的任务，当前状态: {task['status']}"}), 400
 
-        # 二次确认：检查 worker 子进程是否仍在运行
+        # 检查 worker 子进程是否仍在运行
         if is_worker_alive(task_id):
             return jsonify({
                 "error": "该任务的 worker 子进程仍在后台运行，请等待其完成后再重试",
-                "hint": "服务器重启不会终止已启动的 OCR worker 进程",
             }), 409
 
-        # 再次读取最新状态（worker 可能在页面加载后已完成）
+        # 再次读取最新状态
         task = get_task(task_id)
         if task and task["status"] == "completed":
             return jsonify({
@@ -122,28 +164,28 @@ def register_routes(app: Flask) -> None:
         input_path = task.get("input_path", "")
         task_params_str = task.get("task_params", "")
 
-        # 验证输入文件是否存在
         if not input_path or not os.path.isfile(input_path):
             return jsonify({"error": "原始文件已不存在，无法重试"}), 400
 
         try:
             params = json.loads(task_params_str) if task_params_str else {}
-
-            # 用原参数创建新任务
             data = {
                 "filepath": input_path,
                 "filename": task["original_filename"],
                 **params,
             }
             new_task_id = _create_and_run_task(task["task_type"], data)
+            logger.info(f"任务重试: 原={task_id}, 新={new_task_id}")
             return jsonify({
                 "task_id": new_task_id,
                 "message": f"原任务 {task_id[:8]}... 已重新提交",
             })
         except ValueError as e:
+            logger.warning(f"重试参数错误: task_id={task_id}, error={e}")
             return jsonify({"error": str(e)}), 400
-        except Exception as e:
-            return jsonify({"error": f"重试失败: {e}"}), 500
+        except Exception:
+            logger.exception(f"重试异常: task_id={task_id}")
+            return jsonify({"error": "重试失败，请查看日志"}), 500
 
     @app.route("/api/task/<task_id>", methods=["DELETE"])
     def api_delete_task(task_id):
@@ -155,7 +197,7 @@ def register_routes(app: Flask) -> None:
         if task["status"] == "processing":
             return jsonify({"error": "处理中的任务无法删除，请等待完成或中断后再删除"}), 400
 
-        # 清理结果目录 results/<task_id>/
+        # 清理结果目录
         result_dir = os.path.join(RESULT_FOLDER, task_id)
         if os.path.isdir(result_dir):
             _rmtree_safe(result_dir)
@@ -180,19 +222,21 @@ def register_routes(app: Flask) -> None:
         """安全递归删除目录"""
         for root, dirs, files in os.walk(path, topdown=False):
             for name in files:
+                filepath = os.path.join(root, name)
                 try:
-                    os.unlink(os.path.join(root, name))
+                    os.unlink(filepath)
                 except OSError:
-                    pass
+                    logger.debug(f"删除文件失败: {filepath}")
             for name in dirs:
+                dirpath = os.path.join(root, name)
                 try:
-                    os.rmdir(os.path.join(root, name))
+                    os.rmdir(dirpath)
                 except OSError:
-                    pass
+                    logger.debug(f"删除目录失败: {dirpath}")
         try:
             os.rmdir(path)
         except OSError:
-            pass
+            logger.debug(f"删除目录失败: {path}")
 
 
     # ======== 下载路由 ========
@@ -209,6 +253,7 @@ def register_routes(app: Flask) -> None:
         if not result_path or not os.path.isfile(result_path):
             abort(404)
 
+        logger.info(f"下载结果: task_id={task_id}, file={result_filename}")
         return send_file(
             result_path,
             as_attachment=True,

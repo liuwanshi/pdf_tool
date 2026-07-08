@@ -29,6 +29,12 @@ OCR_LANG = "ch"
 # Poppler 路径（Windows 需指定 bin 目录，可通过环境变量覆盖）
 POPPLER_PATH = os.environ.get("POPPLER_PATH", "")
 
+# 日志配置
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")            # 日志级别，支持 DEBUG/INFO/WARNING/ERROR
+LOG_FILE = os.environ.get("LOG_FILE", "")                  # 日志文件路径，留空则仅输出到控制台
+LOG_MAX_BYTES = 10 * 1024 * 1024                           # 单个日志文件最大 10MB
+LOG_BACKUP_COUNT = 5                                       # 保留最近 5 个滚动文件
+
 # 结果文件保留时间（秒），默认 24 小时
 RESULT_RETENTION_SECONDS = 24 * 60 * 60
 
