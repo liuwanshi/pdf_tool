@@ -1,6 +1,7 @@
 """PaddleOCR 封装工具
 
 参照 utils/ocr_pdf_common.py 的实现方式，使用 PaddleOCR 3.x API。
+通过单例模式复用 OCR 引擎实例，避免每次调用时重新加载模型（初始化耗时约 5-10 秒）。
 """
 
 import logging
@@ -8,12 +9,23 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# 全局单例
+# 全局 OCR 实例（模块内部使用，外部应通过 get_ocr() 获取）
 _ocr_instance = None
 
 
 def get_ocr():
-    """获取 PaddleOCR 实例（单例，延迟初始化）"""
+    """获取 PaddleOCR 实例（单例模式，首次调用时初始化）
+
+    设计说明：
+    - 单例：PaddleOCR 模型加载耗时长（5-10s），全局复用避免重复初始化
+    - 延迟初始化：不在 import 时加载，而是首次调用时才加载，加速模块导入
+
+    参数说明（PaddleOCR 3.x API）：
+    - enable_mkldnn=False    关闭 Intel MKL-DNN 加速（避免 Windows 兼容问题）
+    - use_doc_orientation_classify=False  关闭文档方向分类（PDF 已摆正，无需）
+    - use_doc_unwarping=False            关闭文档展平（扫描件可能弯曲，但质量开销大）
+    - use_textline_orientation=False     关闭文字行方向检测（中文默认横排）
+    """
     global _ocr_instance
     if _ocr_instance is None:
         from paddleocr import PaddleOCR

@@ -65,6 +65,7 @@ def add_text_layer_fitz(
 
         box_w = x1 - x0
         box_h = y1 - y0
+        # 跳过无效边界框（宽度或高度为 0 或负值，通常由 OCR 定位错误产生）
         if box_w <= 0 or box_h <= 0:
             continue
 
@@ -187,8 +188,10 @@ def compress_pdf(
 
     reader = pypdf.PdfReader(input_path)
 
-    # 逐步降级：quality 从 60 → 45 → 30 → 20 → 15 → 10
-    # 同时 max_resolution 从 1920 → 1440 → 1080 → 720
+    # 压缩策略：6 轮逐步降级，每轮降低图片质量和分辨率上限
+    # 质量 60/45/30/20/15/10 → 从"肉眼无损"到"勉强可读"
+    # 分辨率 1920/1440/1080/720 → 从"全高清"到"标清"
+    # 后两轮保持 720 不变（再降文字将难以辨认），仅降低质量
     quality_levels = [60, 45, 30, 20, 15, 10]
     resolution_levels = [1920, 1440, 1080, 720, 720, 720]
     best_path = None
@@ -199,12 +202,13 @@ def compress_pdf(
         max_res = resolution_levels[iteration]
 
         writer = pypdf.PdfWriter()
-        writer.add_metadata({})
+        writer.add_metadata({})  # 清空元数据，减少体积
         for page in reader.pages:
+            # 三步压缩流水线：加入 writer → 压缩内容流 → 压缩页面内图片
             writer.add_page(page)
             added_page = writer.pages[-1]
-            added_page.compress_content_streams()
-            _compress_page_images(added_page, quality, max_res)
+            added_page.compress_content_streams()  # 压缩 PDF 内容流（文本、矢量图形）
+            _compress_page_images(added_page, quality, max_res)  # 压缩内嵌图片
 
         with open(output_path, "wb") as f:
             writer.write(f)
@@ -241,6 +245,7 @@ def _compress_page_images(page: pypdf.PageObject, quality: int, max_resolution: 
                 if max(w, h) > max_resolution:
                     scale = max_resolution / max(w, h)
                     new_size = (int(w * scale), int(h * scale))
+                    # LANCZOS：高质量重采样滤镜，缩放后边缘清晰，适合文档/文字类图片
                     pil_img = pil_img.resize(new_size, Image.LANCZOS)
 
                 # ---- 步骤2：模式转换 ----
