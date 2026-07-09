@@ -31,7 +31,7 @@ POPPLER_PATH = os.environ.get("POPPLER_PATH", "")
 
 # 日志配置
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")            # 日志级别，支持 DEBUG/INFO/WARNING/ERROR
-LOG_FILE = os.environ.get("LOG_FILE", "")                  # 日志文件路径，留空则仅输出到控制台
+LOG_FILE = os.path.join(BASE_DIR, "logs")                  # 日志文件路径，留空则仅输出到控制台
 LOG_MAX_BYTES = 10 * 1024 * 1024                           # 单个日志文件最大 10MB
 LOG_BACKUP_COUNT = 5                                       # 保留最近 5 个滚动文件
 
